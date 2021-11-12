@@ -1,0 +1,14 @@
+name: petfinder-fs
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - fastai
+  - defaults
+dependencies:
+  - python=3.7
+  - anaconda
+  - fastai
+  - pip:
+      - timm
+      - kaggle

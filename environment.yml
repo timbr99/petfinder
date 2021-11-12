@@ -1,0 +1,12 @@
+name: petfinder-fs
+channels:
+  - conda-forge
+  - fastchan
+  - defaults
+dependencies:
+  - python=3.7
+  - anaconda
+  - fastai
+  - pip:
+      - timm
+      - kaggle
