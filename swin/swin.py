@@ -13,7 +13,7 @@ from fastai.vision.all import set_seed
 from fastai.vision.all import torch, F
 from fastai.vision.all import Path, ImageDataLoaders, RegressionBlock
 from fastai.vision.all import setup_aug_tfms, Resize, Brightness, Contrast, Hue, Saturation, Warp, Zoom
-from fastai.vision.all import Learner, LRFinder, SaveModelCallback, EarlyStoppingCallback
+from fastai.vision.all import Learner, LRFinder, SaveModelCallback, EarlyStoppingCallback, CSVLogger
 from fastai.vision.all import BCEWithLogitsLossFlat, BCELossFlat, MSELossFlat, L1LossFlat, LabelSmoothingCrossEntropy
 
 
@@ -30,7 +30,8 @@ def custom_rmse(input_score, target_score):
 
 class PetfinderTransformer(object):
     def __init__(self, seed: int, dataset_parent: str = None, train_test_json_path: str = None, batch_size: int = None,
-                 save_path: str = None, num_workers: int = -1, model_name: str = None) -> None:
+                 save_path: str = None, num_workers: int = -1, model_name: str = None,
+                 loss_function_dict: dict = None) -> None:
         """
         Initialize Petfinder Swin Transformer class.
 
@@ -42,6 +43,7 @@ class PetfinderTransformer(object):
         :param save_path: path where model should be saved
         :param num_workers: CPU cores to work on (if on Windows this will be forced to 0)
         :param model_name: Name of pretrained model that will be loaded from TIMM
+        :param loss_function_dict: Dictionary with callable loss functions
         """
 
         set_seed(seed, reproducible=True)
@@ -59,6 +61,7 @@ class PetfinderTransformer(object):
         self.loss_function = None
         self.dataset_path = None
         self.model = None
+        self.learner_recorder = None
         self.model_name = model_name
         self.batch_size = batch_size
         self.save_path = save_path
@@ -66,6 +69,20 @@ class PetfinderTransformer(object):
         self.seed = seed
         self.train_test_json_path = train_test_json_path
         self.dataset_parent = dataset_parent
+        if loss_function_dict is None:
+            self.loss_function_dict = self.default_loss_functions()
+        else:
+            self.loss_function_dict = loss_function_dict
+
+    def default_loss_functions(self):
+        loss_function_dict = {
+            "BCEWithLogitsLossFlat": BCEWithLogitsLossFlat(),
+            "BCELossFlat": BCELossFlat(),
+            "MSELossFlat": MSELossFlat(),
+            "L1LossFlat": L1LossFlat(),
+            "LabelSmoothingCrossEntropy": LabelSmoothingCrossEntropy()
+        }
+        return loss_function_dict
 
     def prepare_test_dataset(self, dataset_parent: str = None, train_test_json_path: str = None) -> None:
         """
@@ -168,7 +185,9 @@ class PetfinderTransformer(object):
                                                                        Contrast(), Hue(),
                                                                        Saturation(), Warp(),
                                                                        Zoom()]))
-
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.image_size = image_size
         return self.dls
 
     def visualize_batch(self, dls: ImageDataLoaders = None) -> None:
@@ -245,13 +264,15 @@ class PetfinderTransformer(object):
             save_path = self.save_path
         learn.fit_one_cycle(epochs, float(optimal_lr.valley), cbs=[SaveModelCallback(),
                                                                    EarlyStoppingCallback(monitor='custom_rmse',
-                                                                                         comp=np.less, patience=3)])
-        learn.recorder.plot_loss()
+                                                                                         comp=np.less, patience=3),
+                                                                   CSVLogger()])
+        self.learner_recorder = learn.recorder.__dict__
         learn = learn.to_fp32()
         if save_path is not None:
             learn.save(save_path)
-            learn.export(save_path)
+            learn.export(os.path.join(save_path, "export.pkl"))
         self.learn = learn
+        self.epochs = epochs
         return learn
 
     def evaluate_model(self, learn: Learner = None, dls: ImageDataLoaders = None,
@@ -292,6 +313,7 @@ class PetfinderTransformer(object):
         self.image_size = config.get("image_size")
         self.model_name = config.get("model_name")
         self.epochs = config.get("epochs")
+        self.loss_function = self.get_loss_function(config.get("loss_function"))
 
     def write_config(self, save_path: str = None) -> None:
         """
@@ -312,12 +334,26 @@ class PetfinderTransformer(object):
             "image_size": self.image_size,
             "model_name": self.model_name,
             "epochs": self.epochs,
+            "loss_function": type(self.loss_function).__name__
         }
         json.dump(config, open(os.path.join(save_path, "config.json"), "w"))
 
+    def get_loss_function(self, loss_function: str = None) -> object:
+        """
+        Returns loss function from loss function library.
+
+        :param loss_function: Name of desired loss function
+        :return: Loss function
+        """
+        if loss_function is None:
+            return BCEWithLogitsLossFlat()
+        else:
+            return self.loss_function_dict.get(loss_function)
+
     def wrap_model(self, config: str = None, save_config: bool = True, dataset_parent: str = None,
-                   train_test_json_path: str = None, batch_size: int = None, num_workers: int = -1,
-                   image_size: int = None, model_name: str = None, epochs: int = None, save_path: str = None) -> None:
+                   train_test_json_path: str = None, loss_function: Union[str, object] = None,
+                   batch_size: int = None, num_workers: int = -1, image_size: int = None, model_name: str = None,
+                   epochs: int = None, save_path: str = None) -> None:
         """
         This function wraps the entire training and evaluation process into one function. Call it to recreate training.
 
@@ -327,6 +363,7 @@ class PetfinderTransformer(object):
         :param dataset_parent: parent path of the dataset (under this dir there should be a folder for train and test files)
         :param train_test_json_path: path to a JSON with IDs of images used for testing the model (this is dirty but
                                      necessary to fairly compare our models)
+        :param loss_function: Loss function as string or callable function
         :param batch_size: Batch size for training (decrease for less memory use -> A100 fits 108)
         :param num_workers: CPU cores to work on (if on Windows this will be forced to 0)
         :param image_size: Size of images (must be square). Must match up with input layer of pretrained model.
@@ -349,6 +386,11 @@ class PetfinderTransformer(object):
             self.dataset_parent = dataset_parent
         if train_test_json_path is not None:
             self.train_test_json_path = train_test_json_path
+        if loss_function is not None:
+            if type(loss_function) == str:
+                self.loss_function = self.get_loss_function(loss_function)
+            else:
+                self.loss_function = loss_function
 
         # now start with prep and training
         self.prepare_test_dataset()
