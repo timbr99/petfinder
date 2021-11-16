@@ -1,0 +1,1 @@
+{"dataset_parent": "../../petfinder-pawpularity-score", "train_test_json_path": "../train_test_val.json", "batch_size": 108, "num_workers": 12, "image_size": 224, "model_name": "models", "epochs": 15, "loss_function": "BCEWithLogitsLossFlat"}
