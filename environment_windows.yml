@@ -12,3 +12,4 @@ dependencies:
   - pip:
       - timm
       - kaggle
+      - statsmodels
