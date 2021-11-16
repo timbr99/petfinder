@@ -1,7 +1,8 @@
 import regr_model_selection
 import statsmodels.api as sm
 
-petfinder = regr_model_selection.ModelSelector('petfinder data/train.csv', 'petfinder data/train_test_val.json')
+petfinder = regr_model_selection.ModelSelector('../petfinder-pawpularity-score/train.csv',
+                                               '../petfinder-pawpularity-score/train_test_val.json')
 
 # ---- Split data in training & test and find all possible regressor combinations ----
 train, train_labels, test, test_labels = petfinder.prepare_train_test_data()
